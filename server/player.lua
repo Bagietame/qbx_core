@@ -431,8 +431,8 @@ function SetPlayerPrimaryGang(citizenid, gangName)
     else
         Save(player.PlayerData.source)
         UpdatePlayerData(player.PlayerData.source)
-        TriggerEvent('QBCore:Server:OnGangUpdate', player.PlayerData.source, player.PlayerData.gang)
-        TriggerClientEvent('QBCore:Client:OnGangUpdate', player.PlayerData.source, player.PlayerData.gang)
+        --TriggerEvent('QBCore:Server:OnGangUpdate', player.PlayerData.source, player.PlayerData.gang)
+        --TriggerClientEvent('QBCore:Client:OnGangUpdate', player.PlayerData.source, player.PlayerData.gang)
     end
 
     return true
@@ -1014,8 +1014,8 @@ function CreatePlayer(playerData, Offline)
 
         if not self.Offline then
             UpdatePlayerData(self.PlayerData.source)
-            TriggerEvent('QBCore:Server:OnGangUpdate', self.PlayerData.source, self.PlayerData.gang)
-            TriggerClientEvent('QBCore:Client:OnGangUpdate', self.PlayerData.source, self.PlayerData.gang)
+            --TriggerEvent('QBCore:Server:OnGangUpdate', self.PlayerData.source, self.PlayerData.gang)
+            --TriggerClientEvent('QBCore:Client:OnGangUpdate', self.PlayerData.source, self.PlayerData.gang)
         end
     end)
 
