@@ -113,7 +113,7 @@ end
 
 ---@param request UpsertPlayerRequest
 local function upsertPlayerEntity(request)
-    local values = {
+    MySQL.insert.await('INSERT INTO players (userId, citizenid, cid, license, name, money, charinfo, job, gang, position, metadata, last_logged_out) VALUES (:userId, :citizenid, :cid, :license, :name, :money, :charinfo, :job, :gang, :position, :metadata, :last_logged_out) ON DUPLICATE KEY UPDATE userId = :userId, name = :name, money = :money, charinfo = :charinfo, job = :job, gang = :gang, position = :position, metadata = :metadata, last_logged_out = :last_logged_out', {
         userId = request.playerEntity.userId,
         citizenid = request.playerEntity.citizenid,
         cid = request.playerEntity.charinfo.cid,
@@ -126,13 +126,7 @@ local function upsertPlayerEntity(request)
         position = json.encode(request.position),
         metadata = json.encode(request.playerEntity.metadata),
         last_logged_out = os.date('%Y-%m-%d %H:%M:%S', request.playerEntity.lastLoggedOut)
-    }
-
-    -- An upsert consumes an AUTO_INCREMENT id even when it only updates, so reserve it for new rows.
-    local affectedRows = MySQL.update.await('UPDATE players SET userId = :userId, name = :name, money = :money, charinfo = :charinfo, job = :job, gang = :gang, position = :position, metadata = :metadata, last_logged_out = :last_logged_out WHERE citizenid = :citizenid', values)
-    if affectedRows and affectedRows > 0 then return end
-
-    MySQL.insert.await('INSERT INTO players (userId, citizenid, cid, license, name, money, charinfo, job, gang, position, metadata, last_logged_out) VALUES (:userId, :citizenid, :cid, :license, :name, :money, :charinfo, :job, :gang, :position, :metadata, :last_logged_out) ON DUPLICATE KEY UPDATE userId = :userId, name = :name, money = :money, charinfo = :charinfo, job = :job, gang = :gang, position = :position, metadata = :metadata, last_logged_out = :last_logged_out', values)
+    })
 end
 
 ---@param citizenId string
@@ -157,11 +151,10 @@ local function fetchAllPlayerEntities(license2, license)
     local result = MySQL.query.await('SELECT citizenid, charinfo, money, job, gang, position, metadata, UNIX_TIMESTAMP(last_logged_out) AS lastLoggedOutUnix FROM players WHERE license = ? OR license = ? ORDER BY cid', {license, license2})
     for i = 1, #result do
         chars[i] = result[i]
-        local playerQBgang = exports['op-crime']:getPlayerOrganisationForQB(result[i].citizenid)
         chars[i].charinfo = json.decode(result[i].charinfo)
         chars[i].money = json.decode(result[i].money)
         chars[i].job = result[i].job and json.decode(result[i].job)
-        chars[i].gang = playerQBgang
+        chars[i].gang = result[i].gang and json.decode(result[i].gang)
         chars[i].position = convertPosition(result[i].position)
         chars[i].metadata = json.decode(result[i].metadata)
         chars[i].lastLoggedOut = result[i].lastLoggedOutUnix
@@ -204,7 +197,6 @@ local function fetchPlayerEntity(citizenId)
     ---@type PlayerEntityDatabase
     local player = MySQL.single.await('SELECT userId, citizenid, license, name, charinfo, money, job, gang, position, metadata, UNIX_TIMESTAMP(last_logged_out) AS lastLoggedOutUnix FROM players WHERE citizenid = ?', { citizenId })
     local charinfo = player and json.decode(player.charinfo)
-    local playerQBgang = player and exports['op-crime']:getPlayerOrganisationForQB(player.citizenid)
     return player and {
         userId = player.userId,
         citizenid = player.citizenid,
@@ -214,7 +206,7 @@ local function fetchPlayerEntity(citizenId)
         charinfo = charinfo,
         cid = charinfo and charinfo.cid,
         job = player.job and json.decode(player.job),
-        gang = playerQBgang,
+        gang = player.gang and json.decode(player.gang),
         position = convertPosition(player.position),
         metadata = json.decode(player.metadata),
         lastLoggedOut = player.lastLoggedOutUnix
@@ -321,9 +313,6 @@ local function deletePlayer(citizenId)
     end
 
     local success = MySQL.transaction.await(queries)
-    if success then
-        TriggerEvent('qbx_core:server:characterDeleted', citizenId)
-    end
     return not not success
 end
 

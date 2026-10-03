@@ -90,13 +90,11 @@ return {
 
             file[fileSize+1] = '}'
 
-            if not SaveResourceFile('qbx_core', 'converted.lua', table.concat(file), -1) then
-                error('Unable to save converted items to qbx_core/converted.lua')
-            end
+            SaveResourceFile('ox_inventory', 'data/items.lua', table.concat(file), -1)
             CreateThread(function()
                 Wait(1000)
-                print('^2[warning]^7 '..count..' items have been added to converted.lua in qbx_core')
-                print('^2[warning]^7 Review converted.lua, copy the converted definitions into ox_inventory/data/items.lua, and restart ox_inventory.')
+                print('^2[warning]^7 '..count..' items have been added to ox_inventory')
+                print('^2[warning]^7 You MUST restart the resource to load the new items.')
             end)
         end
     end

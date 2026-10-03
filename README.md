@@ -1,5 +1,3 @@
-# This is integration with op-crime version above 2.1.0!
-
 ![image](.github/images/banner.jpg)
 
 

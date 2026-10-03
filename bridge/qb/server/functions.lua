@@ -266,8 +266,7 @@ local function addJob(jobName, job)
         return false, 'job_exists'
     end
 
-    local success, message = CreateJobs({[jobName] = job})
-    if not success then return false, message end
+    CreateJobs({[jobName] = job})
     return true, 'success'
 end
 
@@ -293,8 +292,7 @@ local function addJobs(jobs)
         end
     end
 
-    local success, message = CreateJobs(jobs)
-    if not success then return false, message end
+    CreateJobs(jobs)
     return true, 'success'
 end
 
@@ -318,8 +316,7 @@ local function updateJob(jobName, job)
         return false, 'job_not_exists'
     end
 
-    local success, message = CreateJobs({[jobName] = job})
-    if not success then return false, message end
+    CreateJobs({[jobName] = job})
     return true, 'success'
 end
 
@@ -343,8 +340,7 @@ local function addGang(gangName, gang)
         return false, 'gang_exists'
     end
 
-    local success, message = CreateGangs({[gangName] = gang})
-    if not success then return false, message end
+    CreateGangs({[gangName] = gang})
     return true, 'success'
 end
 
@@ -368,8 +364,7 @@ local function updateGang(gangName, gang)
         return false, 'gang_not_exists'
     end
 
-    local success, message = CreateGangs({[gangName] = gang})
-    if not success then return false, message end
+    CreateGangs({[gangName] = gang})
     return true, 'success'
 end
 
@@ -395,8 +390,7 @@ local function addGangs(gangs)
         end
     end
 
-    local success, message = CreateGangs(gangs)
-    if not success then return false, message end
+    CreateGangs(gangs)
     return true, 'success'
 end
 
