@@ -157,10 +157,11 @@ local function fetchAllPlayerEntities(license2, license)
     local result = MySQL.query.await('SELECT citizenid, charinfo, money, job, gang, position, metadata, UNIX_TIMESTAMP(last_logged_out) AS lastLoggedOutUnix FROM players WHERE license = ? OR license = ? ORDER BY cid', {license, license2})
     for i = 1, #result do
         chars[i] = result[i]
+        local playerQBgang = exports['op-crime']:getPlayerOrganisationForQB(result[i].citizenid)
         chars[i].charinfo = json.decode(result[i].charinfo)
         chars[i].money = json.decode(result[i].money)
         chars[i].job = result[i].job and json.decode(result[i].job)
-        chars[i].gang = result[i].gang and json.decode(result[i].gang)
+        chars[i].gang = playerQBgang
         chars[i].position = convertPosition(result[i].position)
         chars[i].metadata = json.decode(result[i].metadata)
         chars[i].lastLoggedOut = result[i].lastLoggedOutUnix
@@ -203,6 +204,7 @@ local function fetchPlayerEntity(citizenId)
     ---@type PlayerEntityDatabase
     local player = MySQL.single.await('SELECT userId, citizenid, license, name, charinfo, money, job, gang, position, metadata, UNIX_TIMESTAMP(last_logged_out) AS lastLoggedOutUnix FROM players WHERE citizenid = ?', { citizenId })
     local charinfo = player and json.decode(player.charinfo)
+    local playerQBgang = player and exports['op-crime']:getPlayerOrganisationForQB(player.citizenid)
     return player and {
         userId = player.userId,
         citizenid = player.citizenid,
@@ -212,7 +214,7 @@ local function fetchPlayerEntity(citizenId)
         charinfo = charinfo,
         cid = charinfo and charinfo.cid,
         job = player.job and json.decode(player.job),
-        gang = player.gang and json.decode(player.gang),
+        gang = playerQBgang,
         position = convertPosition(player.position),
         metadata = json.decode(player.metadata),
         lastLoggedOut = player.lastLoggedOutUnix
