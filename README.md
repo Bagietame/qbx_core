@@ -1,3 +1,5 @@
+# This is integration with op-crime version above 2.1.0!
+
 ![image](.github/images/banner.jpg)
 
 
@@ -27,9 +29,9 @@ The core makes available several optional modules for developers to import into 
 
 # Dependencies
 
-- [oxmysql](https://github.com/CommunityOx/oxmysql)
-- [ox_lib](https://github.com/CommunityOx/ox_lib)
-- [ox_inventory](https://github.com/CommunityOx/ox_inventory)
+- [oxmysql](https://github.com/overextended/oxmysql)
+- [ox_lib](https://github.com/overextended/ox_lib)
+- [ox_inventory](https://github.com/overextended/ox_inventory)
 
 #
 

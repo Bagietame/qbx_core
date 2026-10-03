@@ -1,4 +1,5 @@
 local serverConfig = require 'config.server'.server
+local characterConfig = require 'config.server'.characters
 local loggingConfig = require 'config.server'.logging
 local serverName = require 'config.shared'.serverName
 local storage = require 'server.storage.main'
@@ -51,6 +52,7 @@ AddEventHandler('playerDropped', function(reason)
     })
     player.Functions.Save()
     QBX.Player_Buckets[player.PlayerData.license] = nil
+    QBX.UnregisterPlayer(src)
     QBX.Players[src] = nil
 end)
 
@@ -78,8 +80,8 @@ end
 local function onPlayerConnecting(name, _, deferrals)
     local src = source --[[@as string]]
     local license = GetPlayerIdentifierByType(src, 'license2') or GetPlayerIdentifierByType(src, 'license')
+    local identifiers = getIdentifiers(src)
     deferrals.defer()
-    local userId = storage.fetchUserByIdentifier(license)
 
     -- Mandatory wait
     Wait(0)
@@ -87,21 +89,16 @@ local function onPlayerConnecting(name, _, deferrals)
     if serverConfig.closed then
         if not IsPlayerAceAllowed(src, 'qbadmin.join') then
             deferrals.done(serverConfig.closedReason)
+            return
         end
     end
 
     if not license then
         deferrals.done(locale('error.no_valid_license'))
+        return
     elseif serverConfig.checkDuplicateLicense and usedLicenses[license] then
         deferrals.done(locale('error.duplicate_license'))
-    end
-
-    if not userId then
-        local identifiers = getIdentifiers(src)
-
-        identifiers.username = name
-
-        storage.createUser(identifiers)
+        return
     end
 
     local databaseTime = os.clock()
@@ -109,6 +106,15 @@ local function onPlayerConnecting(name, _, deferrals)
 
     -- conduct database-dependant checks
     CreateThread(function()
+        deferrals.update(locale('info.fetching_user', name))
+        local userId = storage.fetchUserByIdentifier(license)
+        if not userId then
+            identifiers.username = name
+
+            deferrals.update(locale('info.creating_user', name))
+            storage.createUser(identifiers)
+        end
+
         deferrals.update(locale('info.checking_ban', name))
         local success, err = pcall(function()
             local isBanned, Reason = IsPlayerBanned(src --[[@as Source]])
@@ -183,7 +189,16 @@ end)
 -- `if LocalPlayer.state.isLoggedIn then` for the client side
 -- `if Player(source).state.isLoggedIn then` for the server side
 RegisterNetEvent('QBCore:Server:OnPlayerLoaded', function()
-    Player(source --[[@as Source]]).state:set('isLoggedIn', true, true)
+    local src = source --[[@as Source]]
+    local player = GetPlayer(src)
+    if not player or Player(src).state.isLoggedIn then return end
+    Player(src).state:set('isLoggedIn', true, true)
+
+    -- qbx_medical restores health and death/laststand together. A late callback
+    -- from core must not overwrite its resurrected ped's health.
+    if characterConfig.enableHealthInitialization ~= false and GetResourceState('qbx_medical') ~= 'started' then
+        lib.callback.await('qbx_core:client:setHealth', src, player.PlayerData.metadata.health or 200)
+    end
 end)
 
 ---@param source Source
@@ -239,7 +254,7 @@ end)
 ---@param meta 'hunger' | 'thirst' | 'stress'
 ---@param value number
 local function playerStateBagCheck(bagName, meta, value)
-    if not value then return end
+    if type(value) ~= 'number' then return end
     local plySrc = GetPlayerFromStateBagName(bagName)
     if not plySrc then return end
     local player = QBX.Players[plySrc]

@@ -1,4 +1,5 @@
 ---Gang names must be lower case (top level table key)
+---Default example gangs removed — organisations come from op-crime.
 ---@type table<string, Gang>
 return {
     ['none'] = {

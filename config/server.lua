@@ -88,6 +88,7 @@ return {
         discord = '', -- Discord invite link
         checkDuplicateLicense = true, -- Check for duplicate rockstar license on join
         ---@deprecated use cfg ACE system instead
+        requireOptIn = true, -- Set to false to disable the requirement to use the /optin command before accessing admin commands
         permissions = { 'god', 'admin', 'mod' }, -- Add as many groups as you want here after creating them in your server.cfg
     },
 
@@ -97,6 +98,7 @@ return {
         },
 
         defaultNumberOfCharacters = 3, -- Define maximum amount of default characters (maximum 3 characters defined by default)
+        enableHealthInitialization = true, -- Restore health on spawn when qbx_medical is not running. Disable if another medical resource owns health initialization.
     },
 
     -- this configuration is for core events only. putting other webhooks here will have no effect
@@ -137,5 +139,6 @@ return {
     sendPaycheck = function (player, payment)
         player.Functions.AddMoney('bank', payment)
         Notify(player.PlayerData.source, locale('info.received_paycheck', payment))
+        TriggerEvent('qbx_core:server:onPaycheck', player.PlayerData.source, payment)
     end,
 }

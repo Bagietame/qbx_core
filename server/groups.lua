@@ -22,6 +22,47 @@ for name in pairs(gangs) do
     end
 end
 
+---@param grade unknown
+---@return integer? grade
+local function normalizeGrade(grade)
+    if type(grade) == 'string' then
+        if not grade:match('^%d+$') then return end
+        grade = tonumber(grade)
+    end
+
+    if type(grade) ~= 'number' then return end
+    grade = math.tointeger(grade)
+    if not grade or grade < 0 then return end
+
+    return grade
+end
+
+---@param group Job | Gang
+---@return boolean success
+---@return string? message
+local function normalizeGroupGrades(group)
+    if type(group.grades) ~= 'table' then
+        return false, 'Invalid parameter: group grades must be a table.'
+    end
+
+    local grades = {}
+    for grade, data in pairs(group.grades) do
+        local normalizedGrade = normalizeGrade(grade)
+        if not normalizedGrade then
+            return false, ("Invalid grade '%s': grade keys must be non-negative integers."):format(tostring(grade))
+        end
+
+        if grades[normalizedGrade] ~= nil then
+            return false, ("Invalid grade '%s': multiple grade keys resolve to the same integer."):format(tostring(grade))
+        end
+
+        grades[normalizedGrade] = data
+    end
+
+    group.grades = grades
+    return true
+end
+
 --- Removes any quotes to ensure functionality
 ---@param str string
 ---@return string
@@ -107,6 +148,29 @@ local function convertGroupsToPlainText(groupTable, type)
     return table.concat(lines, '\n')
 end
 
+---@param groupType 'Job' | 'Gang'
+---@param name string
+local function notifyGroupUpdate(groupType, name)
+    if groupType == 'Job' then
+        TriggerEvent('qbx_core:server:onJobUpdate', name, jobs[name])
+        TriggerClientEvent('qbx_core:client:onJobUpdate', -1, name, jobs[name])
+    else
+        TriggerEvent('qbx_core:server:onGangUpdate', name, gangs[name])
+        TriggerClientEvent('qbx_core:client:onGangUpdate', -1, name, gangs[name])
+    end
+end
+
+---@param groupType 'Job' | 'Gang'
+---@param commitToFile boolean?
+local function commitGroupToFile(groupType, commitToFile)
+    if not commitToFile then return end
+    if groupType == 'Job' then
+        SaveResourceFile(GetCurrentResourceName(), 'shared/jobs.lua', convertGroupsToPlainText(jobs, 'Job'), -1)
+    else
+        SaveResourceFile(GetCurrentResourceName(), 'shared/gangs.lua', convertGroupsToPlainText(gangs, 'Gang'), -1)
+    end
+end
+
 --- Adds or updates a job entry in shared/jobs.lua.
 --- If the job already exists, it will be overwritten.
 --- @param jobName string The unique name of the job.
@@ -125,18 +189,14 @@ function CreateJob(jobName, job, commitToFile)
         return false, "Invalid parameter: job must be a table."
     end
 
+    local gradesValid, gradesError = normalizeGroupGrades(job)
+    if not gradesValid then return false, gradesError end
+
     -- Store the job data
     jobs[jobName] = job
 
-    -- Notify server and clients about the job update
-    TriggerEvent('qbx_core:server:onJobUpdate', jobName, job)
-    TriggerClientEvent('qbx_core:client:onJobUpdate', -1, jobName, job)
-
-    -- Commit the job data to the shared file
-    if commitToFile then
-        local modifiedData = convertGroupsToPlainText(jobs, 'Job')
-        SaveResourceFile(GetCurrentResourceName(), 'shared/jobs.lua', modifiedData, -1)
-    end
+    notifyGroupUpdate('Job', jobName)
+    commitGroupToFile('Job', commitToFile)
 
     return true, string.format("Job '%s' created/updated successfully.", jobName)
 end
@@ -172,11 +232,7 @@ function CreateJobs(newJobs, commitToFile)
         return false, string.format("Some jobs failed to create: %s", table.concat(failedJobs, ", "))
     end
 
-    -- Commit the job data to the shared file
-    if commitToFile then
-        local modifiedData = convertGroupsToPlainText(jobs, 'Job')
-        SaveResourceFile(GetCurrentResourceName(), 'shared/jobs.lua', modifiedData, -1)
-    end
+    commitGroupToFile('Job', commitToFile)
 
     return true, "All jobs created/updated successfully."
 end
@@ -198,13 +254,8 @@ function RemoveJob(jobName, commitToFile)
     end
 
     jobs[jobName] = nil
-    TriggerEvent('qbx_core:server:onJobUpdate', jobName, nil)
-    TriggerClientEvent('qbx_core:client:onJobUpdate', -1, jobName, nil)
-
-    if commitToFile then
-        local modifiedData = convertGroupsToPlainText(jobs, 'Job')
-        SaveResourceFile(GetCurrentResourceName(), 'shared/jobs.lua', modifiedData, -1)
-    end
+    notifyGroupUpdate('Job', jobName)
+    commitGroupToFile('Job', commitToFile)
     return true, 'success'
 end
 
@@ -213,17 +264,32 @@ exports('RemoveJob', RemoveJob)
 ---Adds or overwrites gangs in shared/gangs.lua
 ---@param newGangs table<string, Gang>
 ---@param commitToFile boolean Whether to commit the gang data to the shared file.
+---@return boolean success
+---@return string? message
 function CreateGangs(newGangs, commitToFile)
-    for gangName, gang in pairs(newGangs) do
-        gangs[gangName] = gang
-        TriggerEvent('qbx_core:server:onGangUpdate', gangName, gang)
-        TriggerClientEvent('qbx_core:client:onGangUpdate', -1, gangName, gang)
+    if type(newGangs) ~= 'table' then
+        return false, 'Invalid parameter: newGangs must be a table.'
     end
 
-    if commitToFile then
-        local modifiedData = convertGroupsToPlainText(gangs, 'Gang')
-        SaveResourceFile(GetCurrentResourceName(), 'shared/gangs.lua', modifiedData, -1)
+    for gangName, gang in pairs(newGangs) do
+        if type(gang) ~= 'table' then
+            return false, ("Invalid parameter: gang '%s' must be a table."):format(tostring(gangName))
+        end
+
+        local gradesValid, gradesError = normalizeGroupGrades(gang)
+        if not gradesValid then
+            lib.print.error(gradesError)
+            return false, ("Gang '%s': %s"):format(tostring(gangName), gradesError)
+        end
     end
+
+    for gangName, gang in pairs(newGangs) do
+        gangs[gangName] = gang
+        notifyGroupUpdate('Gang', gangName)
+    end
+
+    commitGroupToFile('Gang', commitToFile)
+    return true
 end
 
 exports('CreateGangs', CreateGangs)
@@ -244,13 +310,8 @@ function RemoveGang(gangName, commitToFile)
 
     gangs[gangName] = nil
 
-    TriggerEvent('qbx_core:server:onGangUpdate', gangName, nil)
-    TriggerClientEvent('qbx_core:client:onGangUpdate', -1, gangName, nil)
-
-    if commitToFile then
-        local modifiedData = convertGroupsToPlainText(gangs, 'Gang')
-        SaveResourceFile(GetCurrentResourceName(), 'shared/gangs.lua', modifiedData, -1)
-    end
+    notifyGroupUpdate('Gang', gangName)
+    commitGroupToFile('Gang', commitToFile)
     return true, 'success'
 end
 
@@ -304,12 +365,8 @@ local function upsertJobData(name, data, commitToFile)
             grades = {},
         }
     end
-    TriggerEvent('qbx_core:server:onJobUpdate', name, jobs[name])
-    TriggerClientEvent('qbx_core:client:onJobUpdate', -1, name, jobs[name])
-    if commitToFile then
-        local modifiedData = convertGroupsToPlainText(jobs, 'Job')
-        SaveResourceFile(GetCurrentResourceName(), 'shared/jobs.lua', modifiedData, -1)
-    end
+    notifyGroupUpdate('Job', name)
+    commitGroupToFile('Job', commitToFile)
 end
 
 exports('UpsertJobData', upsertJobData)
@@ -326,12 +383,8 @@ local function upsertGangData(name, data, commitToFile)
             grades = {},
         }
     end
-    TriggerEvent('qbx_core:server:onGangUpdate', name, gangs[name])
-    TriggerClientEvent('qbx_core:client:onGangUpdate', -1, name, gangs[name])
-    if commitToFile then
-        local modifiedData = convertGroupsToPlainText(gangs, 'Gang')
-        SaveResourceFile(GetCurrentResourceName(), 'shared/gangs.lua', modifiedData, -1)
-    end
+    notifyGroupUpdate('Gang', name)
+    commitGroupToFile('Gang', commitToFile)
 end
 
 exports('UpsertGangData', upsertGangData)
@@ -345,13 +398,14 @@ local function upsertJobGrade(name, grade, data, commitToFile)
         lib.print.error('Job must exist to edit grades. Not found:', name)
         return
     end
-    jobs[name].grades[grade] = data
-    TriggerEvent('qbx_core:server:onJobUpdate', name, jobs[name])
-    TriggerClientEvent('qbx_core:client:onJobUpdate', -1, name, jobs[name])
-    if commitToFile then
-        local modifiedData = convertGroupsToPlainText(jobs, 'Job')
-        SaveResourceFile(GetCurrentResourceName(), 'shared/jobs.lua', modifiedData, -1)
+    local normalizedGrade = normalizeGrade(grade)
+    if not normalizedGrade then
+        lib.print.error('Job grade must be a non-negative integer:', grade)
+        return
     end
+    jobs[name].grades[normalizedGrade] = data
+    notifyGroupUpdate('Job', name)
+    commitGroupToFile('Job', commitToFile)
 end
 
 exports('UpsertJobGrade', upsertJobGrade)
@@ -365,13 +419,14 @@ local function upsertGangGrade(name, grade, data, commitToFile)
         lib.print.error('Gang must exist to edit grades. Not found:', name)
         return
     end
-    gangs[name].grades[grade] = data
-    TriggerEvent('qbx_core:server:onGangUpdate', name, gangs[name])
-    TriggerClientEvent('qbx_core:client:onGangUpdate', -1, name, gangs[name])
-    if commitToFile then
-        local modifiedData = convertGroupsToPlainText(gangs, 'Gang')
-        SaveResourceFile(GetCurrentResourceName(), 'shared/gangs.lua', modifiedData, -1)
+    local normalizedGrade = normalizeGrade(grade)
+    if not normalizedGrade then
+        lib.print.error('Gang grade must be a non-negative integer:', grade)
+        return
     end
+    gangs[name].grades[normalizedGrade] = data
+    notifyGroupUpdate('Gang', name)
+    commitGroupToFile('Gang', commitToFile)
 end
 
 exports('UpsertGangGrade', upsertGangGrade)
@@ -384,13 +439,14 @@ local function removeJobGrade(name, grade, commitToFile)
         lib.print.error('Job must exist to edit grades. Not found:', name)
         return
     end
-    jobs[name].grades[grade] = nil
-    TriggerEvent('qbx_core:server:onJobUpdate', name, jobs[name])
-    TriggerClientEvent('qbx_core:client:onJobUpdate', -1, name, jobs[name])
-    if commitToFile then
-        local modifiedData = convertGroupsToPlainText(jobs, 'Job')
-        SaveResourceFile(GetCurrentResourceName(), 'shared/jobs.lua', modifiedData, -1)
+    local normalizedGrade = normalizeGrade(grade)
+    if not normalizedGrade then
+        lib.print.error('Job grade must be a non-negative integer:', grade)
+        return
     end
+    jobs[name].grades[normalizedGrade] = nil
+    notifyGroupUpdate('Job', name)
+    commitGroupToFile('Job', commitToFile)
 end
 
 exports('RemoveJobGrade', removeJobGrade)
@@ -403,13 +459,14 @@ local function removeGangGrade(name, grade, commitToFile)
         lib.print.error('Gang must exist to edit grades. Not found:', name)
         return
     end
-    gangs[name].grades[grade] = nil
-    TriggerEvent('qbx_core:server:onGangUpdate', name, gangs[name])
-    TriggerClientEvent('qbx_core:client:onGangUpdate', -1, name, gangs[name])
-    if commitToFile then
-        local modifiedData = convertGroupsToPlainText(gangs, 'Gang')
-        SaveResourceFile(GetCurrentResourceName(), 'shared/gangs.lua', modifiedData, -1)
+    local normalizedGrade = normalizeGrade(grade)
+    if not normalizedGrade then
+        lib.print.error('Gang grade must be a non-negative integer:', grade)
+        return
     end
+    gangs[name].grades[normalizedGrade] = nil
+    notifyGroupUpdate('Gang', name)
+    commitGroupToFile('Gang', commitToFile)
 end
 
 exports('RemoveGangGrade', removeGangGrade)

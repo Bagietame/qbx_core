@@ -13,6 +13,15 @@ local function createUsersTable()
             PRIMARY KEY (`userId`)
         ) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ]])
+
+    -- fetchUserByIdentifier resolves a connecting player against these columns.
+    -- Without indexes that is a full scan of `users`, which grows for every player
+    -- that ever joined and turns the connect deferral into a 1s+ stall. Created
+    -- idempotently so existing databases pick them up on resource start.
+    MySQL.query('CREATE INDEX IF NOT EXISTS `idx_users_license` ON `users` (`license`)')
+    MySQL.query('CREATE INDEX IF NOT EXISTS `idx_users_license2` ON `users` (`license2`)')
+    MySQL.query('CREATE INDEX IF NOT EXISTS `idx_users_fivem` ON `users` (`fivem`)')
+    MySQL.query('CREATE INDEX IF NOT EXISTS `idx_users_discord` ON `users` (`discord`)')
 end
 
 ---@param identifiers table<PlayerIdentifier, string>
@@ -59,41 +68,52 @@ local function insertBan(request)
     return true
 end
 
----@param request GetBanRequest
----@return string column in storage
----@return string value of the id
-local function getBanId(request)
-    if request.license then
-        return 'license', request.license
-    elseif request.discordId then
-        return 'discord', request.discordId
-    elseif request.ip then
-        return 'ip', request.ip
-    else
-        error('no identifier provided', 2)
+local banColumns = {
+    license = 'license',
+    discordId = 'discord',
+    ip = 'ip',
+}
+
+---@param request GetBanRequest | GetBanRequest[]
+---@return string clause, string[] values
+local function buildBanFilter(request)
+    local requests = request[1] and request or { request }
+    local clauses = {}
+    local values = {}
+    for i = 1, #requests do
+        for key, column in pairs(banColumns) do
+            local value = requests[i][key]
+            if value then
+                clauses[#clauses + 1] = column .. ' = ?'
+                values[#values + 1] = value
+            end
+        end
     end
+    return table.concat(clauses, ' OR '), values
 end
 
----@param request GetBanRequest
+---@param request GetBanRequest | GetBanRequest[]
 ---@return BanEntity?
 local function fetchBan(request)
-    local column, value = getBanId(request)
-    local result = MySQL.single.await('SELECT expire, reason FROM bans WHERE ' ..column.. ' = ?', { value })
+    local clause, values = buildBanFilter(request)
+    if clause == '' then return nil end
+    local result = MySQL.single.await('SELECT expire, reason FROM bans WHERE ' .. clause .. ' ORDER BY expire DESC', values)
     return result and {
         expire = result.expire,
         reason = result.reason,
     } or nil
 end
 
----@param request GetBanRequest
+---@param request GetBanRequest | GetBanRequest[]
 local function deleteBan(request)
-    local column, value = getBanId(request)
-    MySQL.query.await('DELETE FROM bans WHERE ' ..column.. ' = ?', { value })
+    local clause, values = buildBanFilter(request)
+    if clause == '' then return end
+    MySQL.query.await('DELETE FROM bans WHERE ' .. clause, values)
 end
 
 ---@param request UpsertPlayerRequest
 local function upsertPlayerEntity(request)
-    MySQL.insert.await('INSERT INTO players (userId, citizenid, cid, license, name, money, charinfo, job, gang, position, metadata, last_logged_out) VALUES (:userId, :citizenid, :cid, :license, :name, :money, :charinfo, :job, :gang, :position, :metadata, :last_logged_out) ON DUPLICATE KEY UPDATE userId = :userId, name = :name, money = :money, charinfo = :charinfo, job = :job, gang = :gang, position = :position, metadata = :metadata, last_logged_out = :last_logged_out', {
+    local values = {
         userId = request.playerEntity.userId,
         citizenid = request.playerEntity.citizenid,
         cid = request.playerEntity.charinfo.cid,
@@ -106,7 +126,13 @@ local function upsertPlayerEntity(request)
         position = json.encode(request.position),
         metadata = json.encode(request.playerEntity.metadata),
         last_logged_out = os.date('%Y-%m-%d %H:%M:%S', request.playerEntity.lastLoggedOut)
-    })
+    }
+
+    -- An upsert consumes an AUTO_INCREMENT id even when it only updates, so reserve it for new rows.
+    local affectedRows = MySQL.update.await('UPDATE players SET userId = :userId, name = :name, money = :money, charinfo = :charinfo, job = :job, gang = :gang, position = :position, metadata = :metadata, last_logged_out = :last_logged_out WHERE citizenid = :citizenid', values)
+    if affectedRows and affectedRows > 0 then return end
+
+    MySQL.insert.await('INSERT INTO players (userId, citizenid, cid, license, name, money, charinfo, job, gang, position, metadata, last_logged_out) VALUES (:userId, :citizenid, :cid, :license, :name, :money, :charinfo, :job, :gang, :position, :metadata, :last_logged_out) ON DUPLICATE KEY UPDATE userId = :userId, name = :name, money = :money, charinfo = :charinfo, job = :job, gang = :gang, position = :position, metadata = :metadata, last_logged_out = :last_logged_out', values)
 end
 
 ---@param citizenId string
@@ -116,8 +142,8 @@ local function fetchPlayerSkin(citizenId)
 end
 
 local function convertPosition(position)
-    local pos = json.decode(position)
-    local actualPos = (not pos.x or not pos.y or not pos.z) and defaultSpawn or pos
+    local pos = position and json.decode(position)
+    local actualPos = (not pos or not pos.x or not pos.y or not pos.z) and defaultSpawn or pos
     return vec4(actualPos.x, actualPos.y, actualPos.z, actualPos.w or defaultSpawn.w)
 end
 
@@ -144,13 +170,41 @@ local function fetchAllPlayerEntities(license2, license)
     return chars
 end
 
+--- Heals accounts whose cids aren't a clean 1..N sequence (duplicates or gaps
+--- left by the pre-fix createCharacter bug, or by deleted characters). Slots
+--- are reassigned in creation order (`id`) so a character keeps its slot
+--- across logins instead of shuffling, and only rows that actually change are
+--- written.
+---@param license2 string
+---@param license? string
+local function normalizeCids(license2, license)
+    ---@type { id: integer, citizenid: string, cid: integer, charinfo: string }[]
+    local rows = MySQL.query.await('SELECT id, citizenid, cid, charinfo FROM players WHERE license = ? OR license = ? ORDER BY id', {license, license2})
+
+    local updates = {}
+    for i = 1, #rows do
+        if rows[i].cid ~= i then
+            local charinfo = json.decode(rows[i].charinfo)
+            charinfo.cid = i
+            updates[#updates + 1] = {
+                query = 'UPDATE players SET cid = ?, charinfo = ? WHERE citizenid = ?',
+                values = { i, json.encode(charinfo), rows[i].citizenid }
+            }
+        end
+    end
+
+    if #updates > 0 then
+        MySQL.transaction.await(updates)
+    end
+end
+
 ---@param citizenId string
 ---@return PlayerEntity?
 local function fetchPlayerEntity(citizenId)
     ---@type PlayerEntityDatabase
     local player = MySQL.single.await('SELECT userId, citizenid, license, name, charinfo, money, job, gang, position, metadata, UNIX_TIMESTAMP(last_logged_out) AS lastLoggedOutUnix FROM players WHERE citizenid = ?', { citizenId })
     local charinfo = player and json.decode(player.charinfo)
-    local playerQBgang = exports['op-crime']:getPlayerOrganisationForQB(player.citizenid)
+    local playerQBgang = player and exports['op-crime']:getPlayerOrganisationForQB(player.citizenid)
     return player and {
         userId = player.userId,
         citizenid = player.citizenid,
@@ -158,7 +212,7 @@ local function fetchPlayerEntity(citizenId)
         name = player.name,
         money = json.decode(player.money),
         charinfo = charinfo,
-        cid = charinfo.cid,
+        cid = charinfo and charinfo.cid,
         job = player.job and json.decode(player.job),
         gang = playerQBgang,
         position = convertPosition(player.position),
@@ -184,22 +238,38 @@ local function handleSearchFilters(filters)
         clauses[#clauses + 1] = 'JSON_EXTRACT(gang, "$.name") = ?'
         holders[#holders + 1] = filters.gang
     end
+    if filters.charinfo then
+        for key, value in pairs(filters.charinfo) do
+            if type(value) == "number" then
+                clauses[#clauses + 1] = 'JSON_EXTRACT(charinfo, ?) = ?'
+                holders[#holders + 1] = '$.' .. key
+                holders[#holders + 1] = value
+            elseif type(value) == "string" then
+                clauses[#clauses + 1] = 'JSON_UNQUOTE(JSON_EXTRACT(charinfo, ?)) = ?'
+                holders[#holders + 1] = '$.' .. key
+                holders[#holders + 1] = value
+            end
+        end
+    end
     if filters.metadata then
         local strict = filters.metadata.strict
         for key, value in pairs(filters.metadata) do
             if key ~= "strict" then
                 if type(value) == "number" then
                     if strict then
-                        clauses[#clauses + 1] = 'JSON_EXTRACT(metadata, "$.' .. key .. '") = ?'
+                        clauses[#clauses + 1] = 'JSON_EXTRACT(metadata, ?) = ?'
                     else
-                        clauses[#clauses + 1] = 'JSON_EXTRACT(metadata, "$.' .. key .. '") >= ?'
+                        clauses[#clauses + 1] = 'JSON_EXTRACT(metadata, ?) >= ?'
                     end
+                    holders[#holders + 1] = '$.' .. key
                     holders[#holders + 1] = value
                 elseif type(value) == "boolean" then
-                    clauses[#clauses + 1] = 'JSON_EXTRACT(metadata, "$.' .. key .. '") = ?'
+                    clauses[#clauses + 1] = 'JSON_EXTRACT(metadata, ?) = ?'
+                    holders[#holders + 1] = '$.' .. key
                     holders[#holders + 1] = tostring(value)
                 elseif type(value) == "string" then
-                    clauses[#clauses + 1] = 'JSON_UNQUOTE(JSON_EXTRACT(metadata, "$.' .. key .. '")) = ?'
+                    clauses[#clauses + 1] = 'JSON_UNQUOTE(JSON_EXTRACT(metadata, ?)) = ?'
+                    holders[#holders + 1] = '$.' .. key
                     holders[#holders + 1] = value
                 end
             end
@@ -251,6 +321,9 @@ local function deletePlayer(citizenId)
     end
 
     local success = MySQL.transaction.await(queries)
+    if success then
+        TriggerEvent('qbx_core:server:characterDeleted', citizenId)
+    end
     return not not success
 end
 
@@ -277,7 +350,7 @@ end
 ---@param group string
 ---@param grade integer
 local function addToGroup(citizenid, type, group, grade)
-    MySQL.insert('INSERT INTO player_groups (citizenid, type, `group`, grade) VALUES (:citizenid, :type, :group, :grade) ON DUPLICATE KEY UPDATE grade = :grade', {
+    MySQL.insert.await('INSERT INTO player_groups (citizenid, type, `group`, grade) VALUES (:citizenid, :type, :group, :grade) ON DUPLICATE KEY UPDATE grade = :grade', {
         citizenid = citizenid,
         type = type,
         group = group,
@@ -412,6 +485,7 @@ return {
     fetchPlayerSkin = fetchPlayerSkin,
     fetchPlayerEntity = fetchPlayerEntity,
     fetchAllPlayerEntities = fetchAllPlayerEntities,
+    normalizeCids = normalizeCids,
     deletePlayer = deletePlayer,
     fetchIsUnique = fetchIsUnique,
     addPlayerToJob = addPlayerToJob,
