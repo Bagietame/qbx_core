@@ -474,9 +474,8 @@ function SetPlayerPrimaryGang(citizenid, gangName)
     else
         Save(player.PlayerData.source)
         UpdatePlayerData(player.PlayerData.source)
-        -- Disabled for op-crime: gang updates are pushed by op-crime itself.
-        --TriggerEvent('QBCore:Server:OnGangUpdate', player.PlayerData.source, player.PlayerData.gang)
-        --TriggerClientEvent('QBCore:Client:OnGangUpdate', player.PlayerData.source, player.PlayerData.gang)
+        TriggerEvent('QBCore:Server:OnGangUpdate', player.PlayerData.source, player.PlayerData.gang)
+        TriggerClientEvent('QBCore:Client:OnGangUpdate', player.PlayerData.source, player.PlayerData.gang)
     end
 
     return true
@@ -1065,9 +1064,8 @@ AddEventHandler('qbx_core:server:onGangUpdate', function(gangName, gang)
             end
 
             UpdatePlayerData(src)
-            -- Disabled for op-crime: gang updates are pushed by op-crime itself.
-            --TriggerEvent('QBCore:Server:OnGangUpdate', src, playerData.gang)
-            --TriggerClientEvent('QBCore:Client:OnGangUpdate', src, playerData.gang)
+            TriggerEvent('QBCore:Server:OnGangUpdate', src, playerData.gang)
+            TriggerClientEvent('QBCore:Client:OnGangUpdate', src, playerData.gang)
         end
     end
 end)
